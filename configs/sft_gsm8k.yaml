@@ -1,0 +1,38 @@
+model:
+  name_or_path: Qwen/Qwen3-4B-Instruct-2507
+  revision: main
+  dtype: bfloat16
+  attn_implementation: sdpa
+  gradient_checkpointing: true
+  use_4bit: false
+
+data:
+  dataset: gsm8k
+  subset: main
+  split: train
+  revision: main
+  validation_size: 256
+  max_train_samples: null
+
+lora:
+  r: 32
+  alpha: 64
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+training:
+  output_dir: checkpoints/sft_gsm8k
+  num_train_epochs: 2
+  learning_rate: 0.0001
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8
+  max_length: 2048
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  logging_steps: 10
+  eval_steps: 100
+  save_steps: 100
+  save_total_limit: 2
+  seed: 42
+  report_to: none
