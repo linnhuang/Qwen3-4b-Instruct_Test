@@ -1,0 +1,26 @@
+model:
+  name_or_path: Qwen/Qwen3-4B-Instruct-2507
+  revision: main
+  dtype: bfloat16
+  trust_remote_code: false
+  attn_implementation: sdpa
+  device_map: cuda:0
+  adapter_path: checkpoints/sft_mbpp_full
+  reasoning_vector:
+    sft_adapter_path: checkpoints/sft_gsm8k
+    grpo_adapter_path: checkpoints/grpo_gsm8k
+    alpha: 1.0
+
+data:
+  dataset: humaneval
+  max_samples: null
+
+generation:
+  max_new_tokens: 512
+  do_sample: false
+  batch_size: 8
+
+runtime:
+  seed: 42
+  output_path: predictions/evalplus_humaneval_sft_plus_reasoning_vector.jsonl
+  resume: true

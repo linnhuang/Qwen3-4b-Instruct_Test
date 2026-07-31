@@ -57,8 +57,40 @@ def load_model_and_tokenizer(config: dict[str, Any]):
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, adapter_path)
+    vector_config = model_config.get("reasoning_vector")
+    vector_metadata = None
+    if vector_config:
+        from qwen3_post_training.reasoning_vectors import (
+            apply_reasoning_vector,
+            merge_target_adapter,
+        )
+
+        model = merge_target_adapter(model)
+        vector_metadata = apply_reasoning_vector(
+            model,
+            sft_adapter_path=vector_config["sft_adapter_path"],
+            grpo_adapter_path=vector_config["grpo_adapter_path"],
+            alpha=float(vector_config.get("alpha", 1.0)),
+        )
+        print(f"Applied reasoning vector: {vector_metadata}")
+    task_vector_config = model_config.get("lora_task_vector")
+    if task_vector_config:
+        if vector_config:
+            raise ValueError("Configure only one of reasoning_vector and lora_task_vector.")
+        from qwen3_post_training.reasoning_vectors import (
+            apply_lora_task_vector,
+            merge_target_adapter,
+        )
+
+        model = merge_target_adapter(model)
+        vector_metadata = apply_lora_task_vector(
+            model,
+            adapter_path=task_vector_config["adapter_path"],
+            alpha=float(task_vector_config.get("alpha", 1.0)),
+        )
+        print(f"Applied LoRA task vector: {vector_metadata}")
     model.eval()
-    return model, tokenizer
+    return model, tokenizer, vector_metadata
 
 
 def render_prompts(tokenizer, messages_batch: list[list[dict[str, str]]]) -> list[str]:
@@ -102,7 +134,7 @@ def run(config: dict[str, Any]) -> None:
     runtime = config["runtime"]
     set_seed(runtime.get("seed", 42))
     dataset = load_eval_dataset(config)
-    model, tokenizer = load_model_and_tokenizer(config)
+    model, tokenizer, vector_metadata = load_model_and_tokenizer(config)
 
     output_path = Path(runtime["output_path"])
     existing = read_jsonl(output_path) if runtime.get("resume", True) else []
@@ -125,6 +157,7 @@ def run(config: dict[str, Any]) -> None:
                     "split": config["data"]["split"],
                     "model": config["model"]["name_or_path"],
                     "adapter": config["model"].get("adapter_path"),
+                    "reasoning_vector": vector_metadata,
                     "prompt": prompt,
                     "completion": completion,
                     "answer": row["answer"],
@@ -142,6 +175,7 @@ def main() -> None:
     parser.add_argument("--config", default="configs/inference.yaml")
     parser.add_argument("--max-samples", type=int, default=None)
     parser.add_argument("--output", default=None)
+    parser.add_argument("--reasoning-vector-alpha", type=float, default=None)
     args = parser.parse_args()
 
     config = load_yaml(args.config)
@@ -149,6 +183,16 @@ def main() -> None:
         config["data"]["max_samples"] = args.max_samples
     if args.output is not None:
         config["runtime"]["output_path"] = args.output
+    if args.reasoning_vector_alpha is not None:
+        vector_config = config["model"].get("reasoning_vector")
+        task_vector_config = config["model"].get("lora_task_vector")
+        active_config = vector_config or task_vector_config
+        if active_config is None:
+            raise ValueError(
+                "--reasoning-vector-alpha requires model.reasoning_vector or "
+                "model.lora_task_vector config."
+            )
+        active_config["alpha"] = args.reasoning_vector_alpha
     run(config)
 
 

@@ -1,0 +1,30 @@
+model:
+  name_or_path: Qwen/Qwen3-4B-Instruct-2507
+  revision: main
+  dtype: bfloat16
+  trust_remote_code: false
+  attn_implementation: sdpa
+  device_map: cuda:0
+  adapter_path: null
+  lora_task_vector:
+    adapter_path: checkpoints/grpo_gsm8k_from_base
+    alpha: 1.0
+
+data:
+  dataset: gsm8k
+  split: test
+  subset: main
+  revision: main
+  max_samples: null
+
+generation:
+  max_new_tokens: 1024
+  do_sample: false
+  temperature: null
+  top_p: null
+  batch_size: 8
+
+runtime:
+  seed: 42
+  output_path: predictions/base_plus_grpo_from_base_vector_gsm8k.jsonl
+  resume: true

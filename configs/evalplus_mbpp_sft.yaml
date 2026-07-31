@@ -1,0 +1,22 @@
+model:
+  name_or_path: Qwen/Qwen3-4B-Instruct-2507
+  revision: main
+  dtype: bfloat16
+  trust_remote_code: false
+  attn_implementation: sdpa
+  device_map: cuda:0
+  adapter_path: checkpoints/sft_mbpp_full
+
+data:
+  dataset: mbpp
+  max_samples: null
+
+generation:
+  max_new_tokens: 512
+  do_sample: false
+  batch_size: 8
+
+runtime:
+  seed: 42
+  output_path: predictions/evalplus_mbpp_sft.jsonl
+  resume: true

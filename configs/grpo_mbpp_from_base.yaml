@@ -1,14 +1,13 @@
 model:
   name_or_path: Qwen/Qwen3-4B-Instruct-2507
-  init_mode: adapter
-  init_adapter_path: checkpoints/sft_gsm8k
+  init_mode: base
+  init_adapter_path: null
   revision: main
   dtype: bfloat16
   attn_implementation: sdpa
 
 data:
-  dataset: gsm8k
-  subset: main
+  dataset: mbpp
   split: train
   revision: main
   max_train_samples: null
@@ -20,21 +19,25 @@ lora:
   target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 
 reward:
-  correctness_weight: 1.0
-  format_weight: 0.1
+  public_test_weight: 1.0
+  syntax_weight: 0.1
+  timeout_seconds: 5.0
 
 training:
-  output_dir: checkpoints/grpo_gsm8k
+  output_dir: checkpoints/grpo_mbpp_from_base
+  learning_rate: 1.0e-6
   num_train_epochs: 1
-  learning_rate: 0.000005
   per_device_train_batch_size: 2
   gradient_accumulation_steps: 8
-  num_generations: 4
-  max_prompt_length: 512
-  max_completion_length: 768
-  beta: 0.04
-  logging_steps: 5
-  save_steps: 100
-  save_total_limit: 2
+  num_generations: 8
+  max_prompt_length: 1024
+  max_completion_length: 512
+  temperature: 0.8
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  logging_steps: 1
+  save_steps: 25
+  save_total_limit: 3
   seed: 42
   report_to: none

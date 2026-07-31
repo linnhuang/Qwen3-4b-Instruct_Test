@@ -1,0 +1,37 @@
+model:
+  name_or_path: Qwen/Qwen3-4B-Instruct-2507
+  revision: main
+  dtype: bfloat16
+  attn_implementation: sdpa
+  gradient_checkpointing: true
+  use_4bit: false
+
+data:
+  dataset: mbpp
+  split: train
+  revision: main
+  validation_size: 20
+  max_train_samples: null
+
+lora: ## 降低强度
+  r: 8
+  alpha: 16
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+training:
+  output_dir: checkpoints/sft_mbpp_full
+  num_train_epochs: 5
+  learning_rate: 0.00002
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 8
+  max_length: 2048
+  warmup_ratio: 0.03
+  weight_decay: 0.01
+  logging_steps: 1
+  eval_steps: 5
+  save_steps: 5
+  save_total_limit: 3
+  seed: 42
+  report_to: none

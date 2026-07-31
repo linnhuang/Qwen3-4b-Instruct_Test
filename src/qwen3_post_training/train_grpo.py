@@ -10,24 +10,75 @@ from trl import GRPOConfig, GRPOTrainer
 
 from qwen3_post_training.common import load_yaml, resolve_dtype, set_seed
 from qwen3_post_training.data.gsm8k import load_gsm8k
+from qwen3_post_training.data.mbpp import load_mbpp
+from qwen3_post_training.rewards.code_reward import public_test_reward, syntax_reward
 from qwen3_post_training.rewards.math_reward import build_weighted_rewards
 
 
 def prepare_dataset(config: dict[str, Any]):
     data = config["data"]
-    if data["dataset"] != "gsm8k":
-        raise ValueError("The initial GRPO implementation supports GSM8K only.")
-    dataset = load_gsm8k(
-        split=data.get("split", "train"),
-        subset=data.get("subset", "main"),
-        revision=data.get("revision", "main"),
-        max_samples=data.get("max_train_samples"),
-    )
+    if data["dataset"] == "gsm8k":
+        dataset = load_gsm8k(
+            split=data.get("split", "train"),
+            subset=data.get("subset", "main"),
+            revision=data.get("revision", "main"),
+            max_samples=data.get("max_train_samples"),
+        )
+    elif data["dataset"] == "mbpp":
+        dataset = load_mbpp(
+            split=data.get("split", "train"),
+            revision=data.get("revision", "main"),
+            max_samples=data.get("max_train_samples"),
+        )
+    else:
+        raise ValueError(f"Unsupported GRPO dataset: {data['dataset']}")
     return dataset.rename_column("messages", "prompt")
+
+
+def build_reward_functions(config: dict[str, Any]):
+    reward = config["reward"]
+    if config["data"]["dataset"] == "gsm8k":
+        return build_weighted_rewards(
+            correctness_weight=reward.get("correctness_weight", 1.0),
+            format_weight=reward.get("format_weight", 0.1),
+        )
+
+    syntax_weight = float(reward.get("syntax_weight", 0.1))
+    public_test_weight = float(reward.get("public_test_weight", 1.0))
+    timeout_seconds = float(reward.get("timeout_seconds", 5.0))
+
+    def weighted_syntax(completions, **kwargs):
+        return [syntax_weight * value for value in syntax_reward(completions, **kwargs)]
+
+    def weighted_public_tests(completions, test_list, **kwargs):
+        return [
+            public_test_weight * value
+            for value in public_test_reward(
+                completions,
+                test_list,
+                timeout_seconds=timeout_seconds,
+                **kwargs,
+            )
+        ]
+
+    weighted_syntax.__name__ = "syntax_reward"
+    weighted_public_tests.__name__ = "public_test_reward"
+    return [weighted_public_tests, weighted_syntax]
 
 
 def build_model_and_peft(config: dict[str, Any]):
     model_config = config["model"]
+    init_mode = model_config.get("init_mode")
+    adapter_path = model_config.get("init_adapter_path")
+    if init_mode not in {"base", "adapter"}:
+        raise ValueError("model.init_mode must be explicitly set to 'base' or 'adapter'.")
+    if init_mode == "base" and adapter_path:
+        raise ValueError("model.init_adapter_path must be null when init_mode='base'.")
+    if init_mode == "adapter" and not adapter_path:
+        raise ValueError("model.init_adapter_path is required when init_mode='adapter'.")
+    if init_mode == "adapter" and not Path(adapter_path).is_dir():
+        raise FileNotFoundError(f"Initial adapter directory does not exist: {adapter_path}")
+
     model = AutoModelForCausalLM.from_pretrained(
         model_config["name_or_path"],
         revision=model_config.get("revision", "main"),
@@ -35,10 +86,11 @@ def build_model_and_peft(config: dict[str, Any]):
         attn_implementation=model_config.get("attn_implementation", "sdpa"),
     )
     model.config.use_cache = False
-    adapter_path = model_config.get("init_adapter_path")
-    if adapter_path and Path(adapter_path).exists():
+    if init_mode == "adapter":
+        print(f"GRPO initialization: adapter={adapter_path}")
         return PeftModel.from_pretrained(model, adapter_path, is_trainable=True), None
 
+    print(f"GRPO initialization: base={model_config['name_or_path']}")
     lora = config["lora"]
     peft_config = LoraConfig(
         r=lora["r"],
@@ -53,6 +105,12 @@ def build_model_and_peft(config: dict[str, Any]):
 
 def run(config: dict[str, Any]) -> None:
     training = config["training"]
+    output_dir = Path(training["output_dir"])
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(
+            f"Refusing to overwrite non-empty GRPO output directory: {output_dir}. "
+            "Choose a new output_dir for a new experiment."
+        )
     set_seed(training.get("seed", 42))
     dataset = prepare_dataset(config)
     model, peft_config = build_model_and_peft(config)
@@ -64,11 +122,7 @@ def run(config: dict[str, Any]) -> None:
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    reward = config["reward"]
-    reward_functions = build_weighted_rewards(
-        correctness_weight=reward.get("correctness_weight", 1.0),
-        format_weight=reward.get("format_weight", 0.1),
-    )
+    reward_functions = build_reward_functions(config)
     args = GRPOConfig(
         output_dir=training["output_dir"],
         num_train_epochs=training["num_train_epochs"],
@@ -79,13 +133,16 @@ def run(config: dict[str, Any]) -> None:
         max_prompt_length=training["max_prompt_length"],
         max_completion_length=training["max_completion_length"],
         beta=training["beta"],
+        epsilon=training.get("epsilon", 0.2),
+        temperature=training.get("temperature", 1.0),
+        top_p=training.get("top_p", 1.0),
         logging_steps=training["logging_steps"],
         save_strategy="steps",
         save_steps=training["save_steps"],
-        save_total_limit=training["save_total_limit"],
+        save_total_limit=training.get("save_total_limit", 3),
         bf16=config["model"].get("dtype") == "bfloat16",
         gradient_checkpointing=True,
-        seed=training["seed"],
+        seed=training.get("seed", 42),
         report_to=training.get("report_to", "none"),
     )
     trainer = GRPOTrainer(
