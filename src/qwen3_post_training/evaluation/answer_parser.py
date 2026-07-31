@@ -23,7 +23,10 @@ def extract_final_answer(text: str) -> str | None:
         rf"{re.escape(FINAL_ANSWER_TAG)}\s*(.+)", text, flags=re.IGNORECASE
     )
     if marker_matches:
-        candidate = marker_matches[-1].strip().splitlines()[0]
+        lines = marker_matches[-1].strip().splitlines()
+        if not lines:
+            return None       # 或 continue 到 fallback 逻辑
+        candidate = lines[0]
         number = _last_number(candidate)
         return number or candidate.strip()
 
