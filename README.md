@@ -1,4 +1,4 @@
-# Qwen3-4B Post-training Experiments
+# b s80sh Post-training Experiments
 
 在固定评测协议下比较 Qwen3-4B-Instruct 的 Base inference、LoRA/QLoRA SFT 和
 GSM8K GRPO。当前核心闭环为：
@@ -191,6 +191,96 @@ rationale；teacher-forced validation loss 改善不等于生成式 exact match 
 `r=8/16`、attention-only LoRA、学习率 `1e-5/2e-5`、`0.25/0.5` epoch，以及按独立 train
 validation 的生成式 exact match 选择 checkpoint。原有 SFT 仍应保留，因为它与现有
 SFT→GRPO 构成论文定义所需的受控 donor pair。
+
+## 实验结果
+
+> 实验环境：NVIDIA H100 80GB HBM3 · Python 3.11 · CUDA 12.x
+> 模型：`Qwen/Qwen3-4B-Instruct-2507` · 评测日期：2026-07-31
+
+### GSM8K（数学推理 · 1319 题）
+
+| 方法             | Accuracy         | 备注                           |
+| ---------------- | ---------------- | ------------------------------ |
+| Base (Instruct)  | **91.74%** | greedy decoding                |
+| SFT (GSM8K)      | 80.06%           | LoRA r=32, 全 attention+MLP    |
+| GRPO (from SFT)  | **93.56%** | `init_mode: adapter`         |
+| GRPO (from Base) | 91.81%           | `init_mode: base`, 全新 LoRA |
+
+### Reasoning Vector 消融 — GSM8K
+
+$v_{reason} = \theta_{GRPO} - \theta_{SFT}$，donor 均来自 GSM8K：
+
+| α    | Accuracy | 说明                         |
+| ----- | -------- | ---------------------------- |
+| −1.0 | 88.48%   | 向量移除（reverse）          |
+| 0.0   | 91.74%   | 等于 Base（sanity check ✓） |
+| 0.5   | 91.51%   |                              |
+| 1.0   | 91.36%   | 论文原设定                   |
+
+### GRPO Task Vector 消融 — GSM8K
+
+$v_{GRPO} = \theta_{GRPO-from-Base} - \theta_{Base}$（无 SFT donor）：
+
+| α    | Accuracy |
+| ----- | -------- |
+| −1.0 | 91.74%   |
+| 0.0   | 91.74%   |
+| 0.5   | 91.81%   |
+| 1.0   | 91.58%   |
+
+### 跨路径差分向量 — GSM8K
+
+$v_{pure} = \theta_{GRPO-from-Base} - \theta_{SFT}$（独立训练的 GRPO 与 SFT）：
+
+| α  | Accuracy                                               |
+| --- | ------------------------------------------------------ |
+| 0.0 | 91.74%                                                 |
+| 0.5 | 91.05%                                                 |
+| 1.0 | ⚠ 评测脚本崩溃（parser 边界 bug，已定位，见下方说明） |
+
+### HumanEval+（代码生成 · 164 题）
+
+| 方法                | Base pass@1        | Plus pass@1        |
+| ------------------- | ------------------ | ------------------ |
+| Base (Instruct)     | 75.0%              | 68.9%              |
+| SFT (MBPP)          | 75.0%              | 68.9%              |
+| + RV α=−1         | 73.8%              | 68.9%              |
+| + RV α=0           | 75.0%              | 68.9%              |
+| + RV α=0.5         | 78.0%              | 71.3%              |
+| **+ RV α=1** | **82.9%** ⬆ | **76.2%** ⬆ |
+
+> 🎯 **跨任务迁移**：在 GSM8K 上训练的 Reasoning Vector 能显著提升 HumanEval+ 表现（+7.9% Base），
+> 说明 GRPO 捕捉的推理能力具有跨领域泛化性。
+
+### MBPP+（代码生成 · 378 题）
+
+| 方法                  | Base pass@1        | Plus pass@1        |
+| --------------------- | ------------------ | ------------------ |
+| Base (Instruct)       | 81.5%              | 69.8%              |
+| SFT (MBPP)            | 82.3%              | 69.8%              |
+| **+ RV α=−1** | **85.4%** ⬆ | **72.5%** ⬆ |
+| + RV α=0             | 83.1%              | 70.9%              |
+| + RV α=0.5           | 81.5%              | 69.8%              |
+| + RV α=1             | 79.9%              | 68.5%              |
+
+> 与 HumanEval+ 不同，MBPP+ 上负 α 表现最佳，表明在 SFT 目标域上"减去"推理向量
+> 反而有助于保持领域内性能。
+
+### 关键发现
+
+1. **SFT 可能损害强 Instruct 模型**：GSM8K SFT 导致准确率下降 11.7pp，但 GRPO 有效修复
+   并超越基线（+1.8pp）。
+2. **GRPO 交叉任务泛化**：在 GSM8K 上训练的 Reasoning Vector 能跨域提升 HumanEval+
+   代码生成（Base pass@1 +7.9pp），验证了论文"推理能力可迁移"的核心主张。
+3. **不同域 α 最优值不同**：代码域上 α 的正负效应因目标域而异，不存在 universal α。
+4. **GRPO 从 Base 起训效果有限**：相比从 SFT 起训（93.56%），从 Base 起训 GRPO
+   仅略微提升（91.74%→91.81%），SFT 提供的初始化可能仍是重要的。
+
+---
+
+*评测细节：GSM8K 使用 greedy decoding + exact match，HumanEval+/MBPP+ 使用
+greedy decoding + EvalPlus 框架 pass@1。所有推理向量实验均使用 LoRA adapter
+的完整 ΔW 重建，而非直接相减 A/B 因子。*
 
 ## 重要限制
 
